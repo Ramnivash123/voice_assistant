@@ -1,8 +1,7 @@
 streamlit
+streamlit-audio-recorder
 python-docx
 numpy
-pyaudio
-soundfile
 openai-whisper
 gtts
 pygame
