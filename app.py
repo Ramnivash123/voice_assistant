@@ -17,8 +17,6 @@ import time
 from datetime import datetime, timedelta
 
 import streamlit as st
-import av
-from streamlit_webrtc import webrtc_streamer, WebRtcMode, AudioProcessorBase
 
 # -----------------------------
 # Timer Thread
@@ -93,21 +91,6 @@ def speak_text(text: str):
             pass
         if os.path.exists(temp_mp3):
             os.remove(temp_mp3)
-
-class AudioRecorder:
-    def __init__(self):
-        self.audio_data = None
-        self.is_recording = False
-        
-    def start_recording(self):
-        self.is_recording = True
-        self.audio_data = None
-        
-    def stop_recording(self):
-        self.is_recording = False
-        
-    def save_audio(self, audio_bytes):
-        self.audio_data = audio_bytes
 
 def transcribe_audio_from_bytes(audio_bytes, model) -> str:
     """Transcribe audio bytes with Whisper."""
@@ -285,8 +268,6 @@ def main():
         st.session_state.questions = []
     if 'model' not in st.session_state:
         st.session_state.model = None
-    if 'audio_recorder' not in st.session_state:
-        st.session_state.audio_recorder = AudioRecorder()
     if 'audio_bytes' not in st.session_state:
         st.session_state.audio_bytes = None
 
@@ -434,7 +415,7 @@ def show_current_question():
     st.markdown("---")
     st.subheader("Record Your Answer")
     
-    # Simple audio recording using file uploader as fallback
+    # Simple audio recording using file uploader
     st.info("Record your answer using your device's voice recorder app, then upload the file below.")
     
     uploaded_audio = st.file_uploader(
@@ -447,6 +428,9 @@ def show_current_question():
         # Read the uploaded audio file
         audio_bytes = uploaded_audio.read()
         st.session_state.audio_bytes = audio_bytes
+        
+        st.success("✅ Audio file uploaded successfully!")
+        st.audio(audio_bytes, format='audio/wav')
         
         if st.button("🎙️ Process Recording", type="primary", key=f"process_{idx}"):
             process_audio_answer(idx, q, audio_bytes)
