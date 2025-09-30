@@ -7,7 +7,7 @@ import docx
 from docx import Document
 
 import numpy as np
-import sounddevice as sd
+import pyaudio
 import wave
 import soundfile as sf
 
@@ -96,8 +96,8 @@ def speak_text(text: str):
 
 def record_wav(path: str, seconds: int = RECORD_SECONDS, sr: int = SAMPLE_RATE):
     st.info(f"🎤 Recording for {seconds} seconds... Answer now!")
-    audio = sd.rec(int(seconds * sr), samplerate=sr, channels=1, dtype="int16")
-    sd.wait()
+    audio = sf.rec(int(seconds * sr), samplerate=sr, channels=1, dtype="int16")
+    sf.wait()
     with wave.open(path, "w") as wf:
         wf.setnchannels(1)
         wf.setsampwidth(2)
