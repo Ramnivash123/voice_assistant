@@ -1,8 +1,7 @@
 streamlit
 python-docx
 numpy
-pyaudio
-soundfile
 openai-whisper
 gtts
 pygame
+pydub
