@@ -17,7 +17,8 @@ import time
 from datetime import datetime, timedelta
 
 import streamlit as st
-from streamlit_audio_recorder import st_audio_recorder
+import av
+from streamlit_webrtc import webrtc_streamer, WebRtcMode, AudioProcessorBase
 
 # -----------------------------
 # Timer Thread
@@ -93,27 +94,31 @@ def speak_text(text: str):
         if os.path.exists(temp_mp3):
             os.remove(temp_mp3)
 
-def save_audio_data(audio_data, path: str):
-    """Save audio data from streamlit-audio-recorder to WAV file."""
-    try:
-        # If audio_data is bytes, write directly to file
-        if isinstance(audio_data, bytes):
-            with open(path, "wb") as f:
-                f.write(audio_data)
-        else:
-            st.error("Invalid audio data format")
-    except Exception as e:
-        st.error(f"Error saving audio: {e}")
+class AudioRecorder:
+    def __init__(self):
+        self.audio_data = None
+        self.is_recording = False
+        
+    def start_recording(self):
+        self.is_recording = True
+        self.audio_data = None
+        
+    def stop_recording(self):
+        self.is_recording = False
+        
+    def save_audio(self, audio_bytes):
+        self.audio_data = audio_bytes
 
-def transcribe_audio(audio_data, model) -> str:
-    """Transcribe audio data with Whisper."""
+def transcribe_audio_from_bytes(audio_bytes, model) -> str:
+    """Transcribe audio bytes with Whisper."""
     try:
         # Create temporary file
         with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_file:
             temp_path = temp_file.name
         
-        # Save audio data
-        save_audio_data(audio_data, temp_path)
+        # Save audio bytes to file
+        with open(temp_path, "wb") as f:
+            f.write(audio_bytes)
         
         # Transcribe
         result = model.transcribe(temp_path, fp16=False)
@@ -280,8 +285,10 @@ def main():
         st.session_state.questions = []
     if 'model' not in st.session_state:
         st.session_state.model = None
-    if 'audio_data' not in st.session_state:
-        st.session_state.audio_data = None
+    if 'audio_recorder' not in st.session_state:
+        st.session_state.audio_recorder = AudioRecorder()
+    if 'audio_bytes' not in st.session_state:
+        st.session_state.audio_bytes = None
 
     # Sidebar for controls
     with st.sidebar:
@@ -427,23 +434,28 @@ def show_current_question():
     st.markdown("---")
     st.subheader("Record Your Answer")
     
-    # Audio recorder component
-    audio_data = st_audio_recorder()
+    # Simple audio recording using file uploader as fallback
+    st.info("Record your answer using your device's voice recorder app, then upload the file below.")
     
-    if audio_data is not None:
-        st.session_state.audio_data = audio_data
-        if st.button("🎙️ Process Recording", type="primary"):
-            process_audio_answer(idx, q)
+    uploaded_audio = st.file_uploader(
+        "Upload Audio Recording", 
+        type=["wav", "mp3", "m4a", "ogg"],
+        key=f"audio_upload_{idx}"
+    )
+    
+    if uploaded_audio is not None:
+        # Read the uploaded audio file
+        audio_bytes = uploaded_audio.read()
+        st.session_state.audio_bytes = audio_bytes
+        
+        if st.button("🎙️ Process Recording", type="primary", key=f"process_{idx}"):
+            process_audio_answer(idx, q, audio_bytes)
 
-def process_audio_answer(idx, q):
+def process_audio_answer(idx, q, audio_bytes):
     """Process the recorded audio answer"""
-    if st.session_state.audio_data is None:
-        st.error("No audio recorded. Please record your answer first.")
-        return
-    
     try:
         with st.spinner("Transcribing your answer..."):
-            answer = transcribe_audio(st.session_state.audio_data, st.session_state.model).lower()
+            answer = transcribe_audio_from_bytes(audio_bytes, st.session_state.model).lower()
         
         # Handle special commands
         if "skip" in answer:
@@ -454,7 +466,7 @@ def process_audio_answer(idx, q):
                 "answer": "[SKIPPED]"
             })
             st.session_state.current_question += 1
-            st.session_state.audio_data = None
+            st.session_state.audio_bytes = None
             st.rerun()
             
         elif "repeat" in answer:
@@ -464,7 +476,7 @@ def process_audio_answer(idx, q):
             except Exception as e:
                 st.error(f"Audio playback error: {e}")
             # Clear audio data for new recording
-            st.session_state.audio_data = None
+            st.session_state.audio_bytes = None
             st.rerun()
             
         else:
@@ -485,7 +497,7 @@ def process_audio_answer(idx, q):
                 st.error(f"Audio playback error: {e}")
             
             # Clear audio data and move to next question
-            st.session_state.audio_data = None
+            st.session_state.audio_bytes = None
             st.session_state.current_question += 1
             st.rerun()
         
