@@ -2,18 +2,14 @@ import re
 import os
 import tempfile
 from datetime import datetime
+import io
 
 import docx
 from docx import Document
 
 import numpy as np
-import sounddevice as sd
-import wave
-import soundfile as sf
-
 import whisper
 from gtts import gTTS
-import pygame
 import threading
 import time
 from datetime import datetime, timedelta
@@ -54,8 +50,6 @@ class ExamTimer(threading.Thread):
 # -----------------------------
 INPUT_DOC = "mugilanQp.docx"
 OUTPUT_DOC = "answers.docx"
-RECORD_SECONDS = 10
-SAMPLE_RATE = 16000
 WHISPER_MODEL = "base"
 
 EXCLUDE_SUBSTRS = {
@@ -71,46 +65,48 @@ EXCLUDE_SUBSTRS = {
 }
 
 # -----------------------------
-# Audio Helpers
+# Audio Helpers (Streamlit Cloud Compatible)
 # -----------------------------
 def speak_text(text: str):
-    """Convert text to speech and play with pygame."""
-    if not pygame.mixer.get_init():
-        pygame.mixer.init()
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as fp:
-        temp_mp3 = fp.name
+    """Convert text to speech and provide audio player."""
     try:
-        gTTS(text=text, lang="en").save(temp_mp3)
-        pygame.mixer.music.load(temp_mp3)
-        pygame.mixer.music.play()
-        clock = pygame.time.Clock()
-        while pygame.mixer.music.get_busy():
-            clock.tick(10)
-    finally:
-        try:
-            pygame.mixer.music.unload()
-        except Exception:
-            pass
-        if os.path.exists(temp_mp3):
-            os.remove(temp_mp3)
+        # Create TTS and save to bytes
+        tts = gTTS(text=text, lang="en")
+        audio_bytes = io.BytesIO()
+        tts.write_to_fp(audio_bytes)
+        audio_bytes.seek(0)
+        
+        # Provide audio player
+        st.audio(audio_bytes, format='audio/mp3')
+        
+    except Exception as e:
+        st.error(f"Text-to-speech error: {e}")
 
-def record_wav(path: str, seconds: int = RECORD_SECONDS, sr: int = SAMPLE_RATE):
-    st.info(f"🎤 Recording for {seconds} seconds... Answer now!")
-    audio = sd.rec(int(seconds * sr), samplerate=sr, channels=1, dtype="int16")
-    sd.wait()
-    with wave.open(path, "w") as wf:
-        wf.setnchannels(1)
-        wf.setsampwidth(2)
-        wf.setframerate(sr)
-        wf.writeframes(audio.tobytes())
-
-def transcribe_wav(path: str, model) -> str:
-    """Transcribe WAV file with Whisper."""
-    audio, sr = sf.read(path, dtype="float32")
-    if sr != SAMPLE_RATE:
-        raise ValueError(f"Recording must be {SAMPLE_RATE} Hz, got {sr}")
-    result = model.transcribe(audio, fp16=False)
-    return (result.get("text") or "").strip()
+def transcribe_audio_file(audio_file, model) -> str:
+    """Transcribe uploaded audio file with Whisper."""
+    try:
+        # Save uploaded file temporarily
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_file:
+            if hasattr(audio_file, 'name'):
+                # Handle file-like objects
+                temp_path = temp_file.name
+                temp_file.write(audio_file.getvalue() if hasattr(audio_file, 'getvalue') else audio_file.read())
+            else:
+                st.error("Invalid audio file format")
+                return ""
+        
+        # Transcribe
+        result = model.transcribe(temp_path, fp16=False)
+        
+        # Clean up
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+            
+        return (result.get("text") or "").strip()
+        
+    except Exception as e:
+        st.error(f"Transcription error: {e}")
+        return ""
 
 # -----------------------------
 # Docx Extractor
@@ -246,9 +242,9 @@ def extract_metadata(path: str):
 # Streamlit UI
 # -----------------------------
 def main():
-    st.set_page_config(page_title="Voice Assistant", layout="wide")
+    st.set_page_config(page_title="Voice Assistant Exam", layout="wide")
     
-    st.title("Voice Assistant")
+    st.title("🎤 Voice Assistant Exam System")
     st.markdown("---")
     
     # Initialize session state
@@ -283,7 +279,7 @@ def main():
             total = len(st.session_state.questions)
             current = st.session_state.current_question
             st.progress(current / total if total > 0 else 0)
-            st.write(f"Question {current}/{total}")
+            st.write(f"Question {current + 1}/{total}")
 
     # Main area
     if not st.session_state.exam_started:
@@ -329,7 +325,7 @@ def start_exam(name, subject):
             st.error("No questions found in the document!")
             return
         
-        # Initialize timer
+        # Initialize timer (2 hours)
         st.session_state.timer = ExamTimer(duration_seconds=7200)
         st.session_state.timer.start()
         
@@ -365,15 +361,11 @@ def show_current_question():
     
     st.header(f"Question {idx + 1}")
     
-    # Automatically read question aloud when first displayed and then start recording
+    # Automatically provide audio when first displayed
     if f'question_{idx}_read' not in st.session_state:
-        try:
-            speak_text(f"Question {idx + 1}. {q['text']}")
-            st.session_state[f'question_{idx}_read'] = True
-            # Automatically start recording after question is read
-            st.session_state[f'question_{idx}_auto_record'] = True
-        except Exception as e:
-            st.error(f"Audio playback error: {e}")
+        st.info("🔊 Question audio ready - click play to listen")
+        speak_text(f"Question {idx + 1}. {q['text']}")
+        st.session_state[f'question_{idx}_read'] = True
     
     # Question display
     with st.expander("View Question", expanded=True):
@@ -383,10 +375,7 @@ def show_current_question():
     
     with col1:
         if st.button("🔊 Repeat Question", use_container_width=True):
-            try:
-                speak_text(f"Question {idx + 1}. {q['text']}")
-            except Exception as e:
-                st.error(f"Audio playback error: {e}")
+            speak_text(f"Question {idx + 1}. {q['text']}")
     
     with col2:
         if st.button("⏭️ Skip Question", use_container_width=True):
@@ -403,58 +392,35 @@ def show_current_question():
             if st.session_state.timer:
                 remaining = st.session_state.timer.formatted_remaining()
                 st.info(f"Time remaining: {remaining}")
-                try:
-                    speak_text(remaining)
-                except Exception as e:
-                    st.error(f"Audio playback error: {e}")
-    
+
     st.markdown("---")
     st.subheader("Record Your Answer")
     
-    # Dynamic recording duration
-    if idx + 1 <= 10:
-        duration = 5
-    elif 11 <= idx + 1 <= 15:
-        duration = 120
-    elif idx + 1 in (16, 17):
-        duration = 300
-    else:
-        duration = RECORD_SECONDS
+    # Audio upload for answers
+    st.info("Record your answer using your device's voice recorder, then upload the audio file below.")
     
-    st.write(f"Recording duration: {duration} seconds")
+    uploaded_audio = st.file_uploader(
+        "Upload Your Audio Answer", 
+        type=["wav", "mp3", "m4a", "ogg"],
+        key=f"audio_upload_{idx}"
+    )
     
-    # Manual recording button (as fallback)
-    if st.button("🎙️ Start Recording (Manual)", use_container_width=True):
-        record_and_process_answer(idx, q, duration)
-    
-    # Automatic recording trigger
-    if st.session_state.get(f'question_{idx}_auto_record'):
-        # Clear the flag first to prevent infinite loop
-        st.session_state[f'question_{idx}_auto_record'] = False
-        # Trigger recording
-        record_and_process_answer(idx, q, duration)
+    if uploaded_audio is not None:
+        # Display the uploaded audio
+        st.audio(uploaded_audio, format='audio/wav')
+        
+        if st.button("🎙️ Process Answer", type="primary", key=f"process_{idx}"):
+            process_audio_answer(idx, q, uploaded_audio)
 
-def record_and_process_answer(idx, q, duration):
-    """Record and process the answer for current question"""
-    temp_wav = os.path.join(tempfile.gettempdir(), f"ans_{idx}.wav")
-    
+def process_audio_answer(idx, q, audio_file):
+    """Process the uploaded audio answer"""
     try:
-        # Show recording status
-        recording_placeholder = st.empty()
-        recording_placeholder.info("🎤 Recording now... Please speak your answer.")
-        
-        # Record audio
-        record_wav(temp_wav, seconds=duration, sr=SAMPLE_RATE)
-        
-        # Update status
-        recording_placeholder.info("🔄 Processing your answer...")
-        
-        # Transcribe
         with st.spinner("Transcribing your answer..."):
-            answer = transcribe_wav(temp_wav, st.session_state.model).lower()
+            answer = transcribe_audio_file(audio_file, st.session_state.model).lower()
         
-        # Clear recording placeholder
-        recording_placeholder.empty()
+        if not answer:
+            st.error("No speech detected in the audio file. Please try again.")
+            return
         
         # Handle special commands
         if "skip" in answer:
@@ -469,14 +435,9 @@ def record_and_process_answer(idx, q, duration):
             
         elif "repeat" in answer:
             st.info("Repeating question based on your voice command...")
-            try:
-                speak_text(f"Question {idx + 1}. {q['text']}")
-                # Set flag to record again after repeating
-                st.session_state[f'question_{idx}_auto_record'] = True
-                st.rerun()
-            except Exception as e:
-                st.error(f"Audio playback error: {e}")
-            return  # Don't advance to next question
+            speak_text(f"Question {idx + 1}. {q['text']}")
+            # Don't advance to next question
+            return
             
         else:
             # Normal answer
@@ -486,26 +447,20 @@ def record_and_process_answer(idx, q, duration):
                 "answer": answer
             })
             
-            st.success("Answer recorded successfully!")
+            st.success("✅ Answer recorded successfully!")
             st.write(f"**Your answer:** {answer}")
             
-            # Read back the answer
-            try:
+            # Optional: Read back the transcribed answer
+            if st.button("🔊 Hear your answer", key=f"hear_{idx}"):
                 speak_text(f"You answered: {answer}")
-                # Small delay before moving to next question
-                time.sleep(2)
-            except Exception as e:
-                st.error(f"Audio playback error: {e}")
             
-            # Move to next question
+            # Move to next question after a short delay
+            time.sleep(2)
             st.session_state.current_question += 1
             st.rerun()
         
     except Exception as e:
         st.error(f"Error processing answer: {str(e)}")
-    finally:
-        if os.path.exists(temp_wav):
-            os.remove(temp_wav)
 
 def complete_exam():
     """Complete the exam and show results"""
@@ -513,17 +468,20 @@ def complete_exam():
     
     # Save answers document
     if st.session_state.qa_items:
-        save_answers_docx(OUTPUT_DOC, st.session_state.qa_items)
-        st.success(f"Answers saved to: {OUTPUT_DOC}")
-        
-        # Provide download link
-        with open(OUTPUT_DOC, "rb") as file:
-            st.download_button(
-                label="📥 Download Answers Document",
-                data=file,
-                file_name=OUTPUT_DOC,
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-            )
+        try:
+            save_answers_docx(OUTPUT_DOC, st.session_state.qa_items)
+            st.success(f"Answers saved to: {OUTPUT_DOC}")
+            
+            # Provide download link
+            with open(OUTPUT_DOC, "rb") as file:
+                st.download_button(
+                    label="📥 Download Answers Document",
+                    data=file,
+                    file_name=OUTPUT_DOC,
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                )
+        except Exception as e:
+            st.error(f"Error saving document: {e}")
     
     # Show summary
     st.subheader("Exam Summary")
