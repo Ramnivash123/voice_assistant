@@ -72,23 +72,26 @@ EXCLUDE_SUBSTRS = {
 # Audio Helpers (Streamlit-based recording)
 # -----------------------------
 def speak_text(text: str):
-    """Convert text to speech and play with pygame."""
-    if not pygame.mixer.get_init():
-        pygame.mixer.init()
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as fp:
-        temp_mp3 = fp.name
+    """Convert text to speech and play with Streamlit audio player."""
     try:
-        gTTS(text=text, lang="en").save(temp_mp3)
-        pygame.mixer.music.load(temp_mp3)
-        pygame.mixer.music.play()
-        clock = pygame.time.Clock()
-        while pygame.mixer.music.get_busy():
-            clock.tick(10)
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as fp:
+            temp_mp3 = fp.name
+        
+        # Generate speech
+        gTTS(text=text, lang="en", slow=False).save(temp_mp3)
+        
+        # Play audio using Streamlit
+        with open(temp_mp3, "rb") as audio_file:
+            audio_bytes = audio_file.read()
+            st.audio(audio_bytes, format="audio/mp3", autoplay=True)
+            
+        st.info(f"🔊: {text}")
+            
+    except Exception as e:
+        st.error(f"Text-to-speech error: {e}")
+        # Fallback: just display the text
+        st.info(f"🔊: {text}")
     finally:
-        try:
-            pygame.mixer.music.unload()
-        except Exception:
-            pass
         if os.path.exists(temp_mp3):
             os.remove(temp_mp3)
 
@@ -109,7 +112,7 @@ def transcribe_audio(audio_bytes, model) -> str:
     finally:
         if 'temp_path' in locals() and os.path.exists(temp_path):
             os.remove(temp_path)
-
+            
 # -----------------------------
 # Docx Extractor
 # -----------------------------
