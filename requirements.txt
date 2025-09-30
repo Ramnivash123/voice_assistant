@@ -4,5 +4,3 @@ numpy
 openai-whisper
 gtts
 pygame
-av
-gunicorn
