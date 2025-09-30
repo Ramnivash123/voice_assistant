@@ -1,8 +1,8 @@
 streamlit
-streamlit-audio-recorder
 python-docx
 numpy
 openai-whisper
 gtts
 pygame
+av
 gunicorn
