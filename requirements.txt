@@ -1,1 +1,7 @@
-
+streamlit
+python-docx
+numpy
+openai-whisper
+gtts
+pydub
+streamlit-audio-recorder
