@@ -2,13 +2,15 @@ import re
 import os
 import tempfile
 from datetime import datetime
-import base64
-import io
 
 import docx
 from docx import Document
 
 import numpy as np
+import sounddevice as sd
+import wave
+import soundfile as sf
+
 import whisper
 from gtts import gTTS
 import pygame
@@ -92,29 +94,23 @@ def speak_text(text: str):
         if os.path.exists(temp_mp3):
             os.remove(temp_mp3)
 
-def transcribe_audio_from_bytes(audio_bytes, model) -> str:
-    """Transcribe audio bytes with Whisper."""
-    try:
-        # Create temporary file
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_file:
-            temp_path = temp_file.name
-        
-        # Save audio bytes to file
-        with open(temp_path, "wb") as f:
-            f.write(audio_bytes)
-        
-        # Transcribe
-        result = model.transcribe(temp_path, fp16=False)
-        
-        # Clean up
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
-            
-        return (result.get("text") or "").strip()
-        
-    except Exception as e:
-        st.error(f"Transcription error: {e}")
-        return ""
+def record_wav(path: str, seconds: int = RECORD_SECONDS, sr: int = SAMPLE_RATE):
+    st.info(f"🎤 Recording for {seconds} seconds... Answer now!")
+    audio = sd.rec(int(seconds * sr), samplerate=sr, channels=1, dtype="int16")
+    sd.wait()
+    with wave.open(path, "w") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sr)
+        wf.writeframes(audio.tobytes())
+
+def transcribe_wav(path: str, model) -> str:
+    """Transcribe WAV file with Whisper."""
+    audio, sr = sf.read(path, dtype="float32")
+    if sr != SAMPLE_RATE:
+        raise ValueError(f"Recording must be {SAMPLE_RATE} Hz, got {sr}")
+    result = model.transcribe(audio, fp16=False)
+    return (result.get("text") or "").strip()
 
 # -----------------------------
 # Docx Extractor
@@ -268,8 +264,6 @@ def main():
         st.session_state.questions = []
     if 'model' not in st.session_state:
         st.session_state.model = None
-    if 'audio_bytes' not in st.session_state:
-        st.session_state.audio_bytes = None
 
     # Sidebar for controls
     with st.sidebar:
@@ -371,11 +365,13 @@ def show_current_question():
     
     st.header(f"Question {idx + 1}")
     
-    # Automatically read question aloud when first displayed
+    # Automatically read question aloud when first displayed and then start recording
     if f'question_{idx}_read' not in st.session_state:
         try:
             speak_text(f"Question {idx + 1}. {q['text']}")
             st.session_state[f'question_{idx}_read'] = True
+            # Automatically start recording after question is read
+            st.session_state[f'question_{idx}_auto_record'] = True
         except Exception as e:
             st.error(f"Audio playback error: {e}")
     
@@ -415,31 +411,50 @@ def show_current_question():
     st.markdown("---")
     st.subheader("Record Your Answer")
     
-    # Simple audio recording using file uploader
-    st.info("Record your answer using your device's voice recorder app, then upload the file below.")
+    # Dynamic recording duration
+    if idx + 1 <= 10:
+        duration = 5
+    elif 11 <= idx + 1 <= 15:
+        duration = 120
+    elif idx + 1 in (16, 17):
+        duration = 300
+    else:
+        duration = RECORD_SECONDS
     
-    uploaded_audio = st.file_uploader(
-        "Upload Audio Recording", 
-        type=["wav", "mp3", "m4a", "ogg"],
-        key=f"audio_upload_{idx}"
-    )
+    st.write(f"Recording duration: {duration} seconds")
     
-    if uploaded_audio is not None:
-        # Read the uploaded audio file
-        audio_bytes = uploaded_audio.read()
-        st.session_state.audio_bytes = audio_bytes
-        
-        st.success("✅ Audio file uploaded successfully!")
-        st.audio(audio_bytes, format='audio/wav')
-        
-        if st.button("🎙️ Process Recording", type="primary", key=f"process_{idx}"):
-            process_audio_answer(idx, q, audio_bytes)
+    # Manual recording button (as fallback)
+    if st.button("🎙️ Start Recording (Manual)", use_container_width=True):
+        record_and_process_answer(idx, q, duration)
+    
+    # Automatic recording trigger
+    if st.session_state.get(f'question_{idx}_auto_record'):
+        # Clear the flag first to prevent infinite loop
+        st.session_state[f'question_{idx}_auto_record'] = False
+        # Trigger recording
+        record_and_process_answer(idx, q, duration)
 
-def process_audio_answer(idx, q, audio_bytes):
-    """Process the recorded audio answer"""
+def record_and_process_answer(idx, q, duration):
+    """Record and process the answer for current question"""
+    temp_wav = os.path.join(tempfile.gettempdir(), f"ans_{idx}.wav")
+    
     try:
+        # Show recording status
+        recording_placeholder = st.empty()
+        recording_placeholder.info("🎤 Recording now... Please speak your answer.")
+        
+        # Record audio
+        record_wav(temp_wav, seconds=duration, sr=SAMPLE_RATE)
+        
+        # Update status
+        recording_placeholder.info("🔄 Processing your answer...")
+        
+        # Transcribe
         with st.spinner("Transcribing your answer..."):
-            answer = transcribe_audio_from_bytes(audio_bytes, st.session_state.model).lower()
+            answer = transcribe_wav(temp_wav, st.session_state.model).lower()
+        
+        # Clear recording placeholder
+        recording_placeholder.empty()
         
         # Handle special commands
         if "skip" in answer:
@@ -450,18 +465,18 @@ def process_audio_answer(idx, q, audio_bytes):
                 "answer": "[SKIPPED]"
             })
             st.session_state.current_question += 1
-            st.session_state.audio_bytes = None
             st.rerun()
             
         elif "repeat" in answer:
             st.info("Repeating question based on your voice command...")
             try:
                 speak_text(f"Question {idx + 1}. {q['text']}")
+                # Set flag to record again after repeating
+                st.session_state[f'question_{idx}_auto_record'] = True
+                st.rerun()
             except Exception as e:
                 st.error(f"Audio playback error: {e}")
-            # Clear audio data for new recording
-            st.session_state.audio_bytes = None
-            st.rerun()
+            return  # Don't advance to next question
             
         else:
             # Normal answer
@@ -477,16 +492,20 @@ def process_audio_answer(idx, q, audio_bytes):
             # Read back the answer
             try:
                 speak_text(f"You answered: {answer}")
+                # Small delay before moving to next question
+                time.sleep(2)
             except Exception as e:
                 st.error(f"Audio playback error: {e}")
             
-            # Clear audio data and move to next question
-            st.session_state.audio_bytes = None
+            # Move to next question
             st.session_state.current_question += 1
             st.rerun()
         
     except Exception as e:
         st.error(f"Error processing answer: {str(e)}")
+    finally:
+        if os.path.exists(temp_wav):
+            os.remove(temp_wav)
 
 def complete_exam():
     """Complete the exam and show results"""
