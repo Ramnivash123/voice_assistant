@@ -7,9 +7,9 @@ import docx
 from docx import Document
 
 import numpy as np
-import sounddevice as sd
+import pyaudio
 import wave
-import soundfile as sf
+import numpy as np
 
 import whisper
 from gtts import gTTS
@@ -96,14 +96,35 @@ def speak_text(text: str):
 
 def record_wav(path: str, seconds: int = RECORD_SECONDS, sr: int = SAMPLE_RATE):
     st.info(f"🎤 Recording for {seconds} seconds... Answer now!")
-    audio = sd.rec(int(seconds * sr), samplerate=sr, channels=1, dtype="int16")
-    sd.wait()
-    with wave.open(path, "w") as wf:
-        wf.setnchannels(1)
-        wf.setsampwidth(2)
+    
+    CHUNK = 1024
+    FORMAT = pyaudio.paInt16
+    CHANNELS = 1
+    
+    p = pyaudio.PyAudio()
+    
+    stream = p.open(format=FORMAT,
+                    channels=CHANNELS,
+                    rate=sr,
+                    input=True,
+                    frames_per_buffer=CHUNK)
+    
+    frames = []
+    
+    for _ in range(0, int(sr / CHUNK * seconds)):
+        data = stream.read(CHUNK)
+        frames.append(data)
+    
+    stream.stop_stream()
+    stream.close()
+    p.terminate()
+    
+    with wave.open(path, 'wb') as wf:
+        wf.setnchannels(CHANNELS)
+        wf.setsampwidth(p.get_sample_size(FORMAT))
         wf.setframerate(sr)
-        wf.writeframes(audio.tobytes())
-
+        wf.writeframes(b''.join(frames))
+        
 def transcribe_wav(path: str, model) -> str:
     """Transcribe WAV file with Whisper."""
     audio, sr = sf.read(path, dtype="float32")
