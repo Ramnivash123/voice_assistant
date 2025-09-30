@@ -4,4 +4,3 @@ numpy>=1.21.0
 openai-whisper>=20231117
 gtts>=2.5.1
 pydub>=0.25.1
-streamlit-audio-recorder>=0.0.1
