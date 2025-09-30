@@ -7,3 +7,4 @@ openai-whisper
 gtts
 pygame
 pyaudio
+portaudio
