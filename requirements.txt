@@ -6,3 +6,4 @@ soundfile
 openai-whisper
 gtts
 pygame
+pyaudio
