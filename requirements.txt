@@ -1,7 +1,8 @@
 streamlit
 python-docx
 numpy
+sounddevice
+soundfile
 openai-whisper
 gtts
-pydub
-sounddevice
+pygame
